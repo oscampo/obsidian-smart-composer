@@ -71,6 +71,7 @@ export class RAGEngine {
     )
   }
 
+// --- INICIO DEL INJERTO CORA ---
   async processQuery({
     query,
     scope,
@@ -87,32 +88,52 @@ export class RAGEngine {
       similarity: number
     })[]
   > {
-    if (!this.embeddingModel) {
-      throw new Error('Embedding model is not set')
+    console.log("🕸️ [Cora Mod] Interceptando búsqueda. Redirigiendo a LightRAG...");
+    
+    onQueryProgressChange?.({ type: 'querying' })
+
+    try {
+      // 1. Llamar a TU API en Python (Backend Local)
+      const response = await fetch("http://127.0.0.1:8000/query_lightrag", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+            query: query, 
+            mode: "hybrid" // Usamos el modo más potente
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Error del Backend Cora: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const lightRagAnswer = data.response; // La respuesta generada por el grafo
+
+      console.log("✅ [Cora Mod] Respuesta recibida del Grafo.");
+
+      onQueryProgressChange?.({ 
+          type: 'querying-done', 
+          queryResult: [] // Hack visual para que deje de cargar
+      })
+
+      // 2. EL TRUCO DE MAGIA (VERSIÓN 3.0 - STRICT TYPE)
+      const fakeDoc: any = {
+          id: -1,
+          path: "🧠 Memoria del Grafo",
+          content: lightRagAnswer,
+          similarity: 1.0,
+          metadata: { startLine: 0, endLine: 0 }
+      };
+      return [fakeDoc];
+
+    } catch (error) {
+      console.error("❌ [Cora Mod] Error conectando con Python:", error);
+      // Fallback: Si el servidor está apagado, devolvemos lista vacía
+      return [];
     }
-    // TODO: Decide the vault index update strategy.
-    // Current approach: Update on every query.
-    await this.updateVaultIndex({ reindexAll: false }, onQueryProgressChange)
-    const queryEmbedding = await this.getQueryEmbedding(query)
-    onQueryProgressChange?.({
-      type: 'querying',
-    })
-    const queryResult =
-      (await this.vectorManager?.performSimilaritySearch(
-        queryEmbedding,
-        this.embeddingModel,
-        {
-          minSimilarity: this.settings.ragOptions.minSimilarity,
-          limit: this.settings.ragOptions.limit,
-          scope,
-        },
-      )) ?? []
-    onQueryProgressChange?.({
-      type: 'querying-done',
-      queryResult,
-    })
-    return queryResult
   }
+  // --- FIN DEL INJERTO CORA ---
 
   private async getQueryEmbedding(query: string): Promise<number[]> {
     if (!this.embeddingModel) {

@@ -1,4 +1,4 @@
-import { App } from 'obsidian'
+import { App, TFile } from 'obsidian' // <--- 1. ¡IMPORTANTE! Agregado TFile
 
 import { QueryProgressState } from '../../components/chat-view/QueryProgress'
 import { VectorManager } from '../../database/modules/vector/VectorManager'
@@ -8,7 +8,6 @@ import { EmbeddingModelClient } from '../../types/embedding'
 
 import { getEmbeddingModelClient } from './embedding'
 
-// TODO: do we really need this class? It seems like unnecessary abstraction.
 export class RAGEngine {
   private app: App
   private settings: SmartComposerSettings
@@ -34,7 +33,6 @@ export class RAGEngine {
     this.vectorManager = null
   }
 
-  // TODO: use addSettingsChangeListener
   setSettings(settings: SmartComposerSettings) {
     this.settings = settings
     this.embeddingModel = getEmbeddingModelClient({
@@ -43,36 +41,18 @@ export class RAGEngine {
     })
   }
 
-  // TODO: Implement automatic vault re-indexing when settings are changed.
-  // Currently, users must manually re-index the vault.
   async updateVaultIndex(
-    options: { reindexAll: boolean } = {
-      reindexAll: false,
-    },
+    options: { reindexAll: boolean } = { reindexAll: false },
     onQueryProgressChange?: (queryProgress: QueryProgressState) => void,
   ): Promise<void> {
+    // Método neutralizado o mantenido por compatibilidad, pero no lo usamos activamente
     if (!this.embeddingModel) {
       throw new Error('Embedding model is not set')
     }
-    await this.vectorManager?.updateVaultIndex(
-      this.embeddingModel,
-      {
-        chunkSize: this.settings.ragOptions.chunkSize,
-        excludePatterns: this.settings.ragOptions.excludePatterns,
-        includePatterns: this.settings.ragOptions.includePatterns,
-        reindexAll: options.reindexAll,
-      },
-      (indexProgress) => {
-        onQueryProgressChange?.({
-          type: 'indexing',
-          indexProgress,
-        })
-      },
-    )
   }
 
-// --- INICIO DEL INJERTO CORA ---
-  async processQuery({
+// --- INICIO DEL INJERTO CORA (VERSIÓN HÍBRIDA: LOCAL + GRAFO) ---
+ async processQuery({
     query,
     scope,
     onQueryProgressChange,
@@ -88,49 +68,100 @@ export class RAGEngine {
       similarity: number
     })[]
   > {
-    console.log("🕸️ [Cora Mod] Interceptando búsqueda. Redirigiendo a LightRAG...");
     
+    // 1. ESTRATEGIA LOCAL (Chat normal con @Archivo)
+    if (scope && scope.files && scope.files.length > 0) {
+        // ... (Mismo código de lectura local que ya funcionaba) ...
+        // (Te lo resumo aquí para no ocupar espacio, déjalo igual)
+        const localResults: any[] = [];
+        for (const filePath of scope.files) {
+             const file = this.app.vault.getAbstractFileByPath(filePath);
+             if (file instanceof TFile) {
+                const content = await this.app.vault.read(file);
+                localResults.push({
+                    id: -1,
+                    model: 'local-file',
+                    path: filePath,
+                    content: content,
+                    similarity: 1.0,
+                    mtime: file.stat.mtime,
+                    metadata: { startLine: 0, endLine: 0, fileName: file.name, content: content }
+                });
+             }
+        }
+        onQueryProgressChange?.({ type: 'querying-done', queryResult: [] });
+        return localResults;
+    }
+
+    // 2. ESTRATEGIA GLOBAL (Vault Chat -> LightRAG)
+    console.log("🕸️ [Cora Plugin] Consultando LightRAG Server...");
     onQueryProgressChange?.({ type: 'querying' })
 
-    try {
-      // 1. Llamar a TU API en Python (Backend Local)
-      const response = await fetch("http://127.0.0.1:8000/query_lightrag", {
+try {
+      // 1. LLAMADA AL SERVIDOR
+      const response = await fetch("http://localhost:9621/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
             query: query, 
-            mode: "hybrid" // Usamos el modo más potente
+            mode: "hybrid", 
+            stream: false,
+            only_need_context: false
         })
       });
 
-      if (!response.ok) {
-        throw new Error(`Error del Backend Cora: ${response.statusText}`);
-      }
+      if (!response.ok) throw new Error(`Error LightRAG: ${response.status}`);
 
       const data = await response.json();
-      const lightRagAnswer = data.response; // La respuesta generada por el grafo
+      console.log("✅ [Cora Plugin] Datos recibidos:", data);
 
-      console.log("✅ [Cora Mod] Respuesta recibida del Grafo.");
+      const results: any[] = [];
 
-      onQueryProgressChange?.({ 
-          type: 'querying-done', 
-          queryResult: [] // Hack visual para que deje de cargar
-      })
+      // A. LA RESPUESTA GENERADA (Lo más importante)
+      const graphAnswer = typeof data === 'string' ? data : (data.response || "");
+      
+      if (graphAnswer) {
+          results.push({
+              id: -1,
+              model: 'lightrag-answer',
+              path: "❤️ Respuesta de Cora (Grafo)",
+              content: graphAnswer,
+              similarity: 1.0,
+              mtime: Date.now(),
+              metadata: { startLine: 0, endLine: 0, fileName: "GraphAnswer", content: graphAnswer }
+          });
+      }
 
-      // 2. EL TRUCO DE MAGIA (VERSIÓN 3.0 - STRICT TYPE)
-      const fakeDoc: any = {
-          id: -1,
-          path: "🧠 Memoria del Grafo",
-          content: lightRagAnswer,
-          similarity: 1.0,
-          metadata: { startLine: 0, endLine: 0 }
-      };
-      return [fakeDoc];
+      // B. LAS REFERENCIAS (Solo Títulos/Rutas)
+      // No leemos el contenido del disco. Solo listamos los archivos.
+      if (data.references && Array.isArray(data.references)) {
+          
+          // Opcional: Crear un solo documento que liste todas las fuentes para ahorrar espacio visual
+          // O crear uno por cada archivo (como pediste). Hagamos uno por archivo para que se vea la lista.
+          
+          for (let i = 0; i < data.references.length; i++) {
+              const ref = data.references[i];
+              const filePath = ref.file_path || `Ref #${i+1}`;
+              
+              results.push({
+                  id: -(i + 2), // IDs únicos negativos
+                  model: 'lightrag-ref',
+                  path: `📂 ${filePath}`, // Esto es lo que verás en la lista
+                  // Contenido mínimo para que el plugin no falle, pero sin gastar tokens
+                  content: `[Fuente utilizada por el Grafo: ${filePath}]`, 
+                  similarity: 0.5, // Menor relevancia que la respuesta principal
+                  mtime: Date.now(),
+                  metadata: { startLine: 0, endLine: 0, fileName: filePath }
+              });
+          }
+      }
+
+      onQueryProgressChange?.({ type: 'querying-done', queryResult: [] })
+      return results;
 
     } catch (error) {
-      console.error("❌ [Cora Mod] Error conectando con Python:", error);
-      // Fallback: Si el servidor está apagado, devolvemos lista vacía
-      return [];
+        console.error("❌ Error:", error);
+        return [];
     }
   }
   // --- FIN DEL INJERTO CORA ---

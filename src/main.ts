@@ -128,7 +128,7 @@ export default class SmartComposerPlugin extends Plugin {
     // This adds a settings tab so the user can configure various aspects of the plugin
     this.addSettingTab(new SmartComposerSettingTab(this.app, this))
 
-    void this.migrateToJsonStorage()
+    //void this.migrateToJsonStorage() // <-- Comentado!
   }
 
   onunload() {
@@ -239,7 +239,7 @@ ${validationResult.error.issues.map((v) => v.message).join('\n')}`)
     chatView.addSelectionToChat(data)
     chatView.focusMessage()
   }
-
+/*
   async getDbManager(): Promise<DatabaseManager> {
     if (this.dbManager) {
       return this.dbManager
@@ -263,6 +263,13 @@ ${validationResult.error.issues.map((v) => v.message).join('\n')}`)
     // if initialization is running, wait for it to complete instead of creating a new initialization promise
     return this.dbManagerInitPromise
   }
+*/
+
+async getDbManager(): Promise<DatabaseManager> {
+    // CORA MOD: Bypass database initialization
+    console.log("🕸️ [Cora Mod] Saltando inicialización de DB Local...");
+    return {} as any; // Devolvemos un objeto vacío para que no chille TypeScript
+}
 
   async getRAGEngine(): Promise<RAGEngine> {
     if (this.ragEngine) {
@@ -271,7 +278,7 @@ ${validationResult.error.issues.map((v) => v.message).join('\n')}`)
 
     if (!this.ragEngineInitPromise) {
       this.ragEngineInitPromise = (async () => {
-        try {
+        /*try {
           const dbManager = await this.getDbManager()
           this.ragEngine = new RAGEngine(
             this.app,
@@ -279,7 +286,19 @@ ${validationResult.error.issues.map((v) => v.message).join('\n')}`)
             dbManager.getVectorManager(),
           )
           return this.ragEngine
-        } catch (error) {
+        }*/ 
+        try {
+          // CORA MOD: Bypass Vector Manager
+          // // Pasamos 'null' o un objeto vacío como vectorManager.
+          // // Como ya modificamos 'ragEngine.ts' para no usarlo, no importa.
+        this.ragEngine = new RAGEngine(
+          this.app,
+          this.settings,
+          {} as any, // <--- ¡AQUÍ ESTÁ EL TRUCO!
+      )
+      return this.ragEngine
+    }
+    catch (error) {
           this.ragEngineInitPromise = null
           throw error
         }
